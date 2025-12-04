@@ -97,11 +97,11 @@ wget --no-check-certificate https://dl.cacerts.digicert.com/DigiCertGlobalRootCA
 # Download DigiCert Global Root G2 (new certificate)
 wget --no-check-certificate https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem
 
-# Download Microsoft RSA Root Certificate Authority 2017 (new certificate)
-wget --no-check-certificate https://www.microsoft.com/pkiops/certs/Microsoft%20RSA%20Root%20Certificate%20Authority%202017.crt
+# Download Microsoft RSA Root Certificate Authority 2017 (new certificate).  Need to use curl to avoid SSL certificate issues.
+curl -sSL "http://www.microsoft.com/pkiops/certs/Microsoft%20RSA%20Root%20Certificate%20Authority%202017.crt" --output MicrosoftRSARootCertificateAuthority2017.crt
 
 # Convert Microsoft certificate from DER to PEM format
-openssl x509 -inform der -in "Microsoft RSA Root Certificate Authority 2017.crt" -out MicrosoftRSARootCertificateAuthority2017.crt.pem
+openssl x509 -inform der -in "MicrosoftRSARootCertificateAuthority2017.crt" -out MicrosoftRSARootCertificateAuthority2017.crt.pem
 
 # Create combined certificate file with all three certificates
 cat DigiCertGlobalRootCA.crt.pem DigiCertGlobalRootG2.crt.pem MicrosoftRSARootCertificateAuthority2017.crt.pem > combined-ca-bundle.pem
