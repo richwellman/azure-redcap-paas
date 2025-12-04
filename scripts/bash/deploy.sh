@@ -32,6 +32,11 @@ echo "extension=/usr/local/lib/php/extensions/no-debug-non-zts-20220829/mysqli.s
 #
 ####################################################################################
 
+# Install unzip if not already installed
+if ! command -v unzip &> /dev/null; then
+  apt-get update && apt-get install -y unzip
+fi
+
 redcapZipPath="/tmp/redcap.zip"
 
 cd /tmp
