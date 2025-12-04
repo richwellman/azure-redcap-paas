@@ -4,6 +4,7 @@
 # All rights reserved.
 #
 # MIT License
+# Use curl to avoid SSL certificate issues.
 
 ####################################################################################
 #
