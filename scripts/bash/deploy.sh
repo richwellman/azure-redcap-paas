@@ -88,13 +88,32 @@ echo "Updating database connection info in database.php" >> /home/site/log-$stam
 
 cd /home/site/wwwroot
 
+# Download all three required certificates for Azure MySQL Flexible Server
+echo "Downloading MySQL SSL certificates..." >> /home/site/log-$stamp.txt
+
+# Download DigiCert Global Root CA (existing/legacy certificate)
 wget --no-check-certificate https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt.pem
+
+# Download DigiCert Global Root G2 (new certificate)
+wget --no-check-certificate https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem
+
+# Download Microsoft RSA Root Certificate Authority 2017 (new certificate)
+wget --no-check-certificate https://www.microsoft.com/pkiops/certs/Microsoft%20RSA%20Root%20Certificate%20Authority%202017.crt
+
+# Convert Microsoft certificate from DER to PEM format
+openssl x509 -inform der -in "Microsoft RSA Root Certificate Authority 2017.crt" -out MicrosoftRSARootCertificateAuthority2017.crt.pem
+
+# Create combined certificate file with all three certificates
+cat DigiCertGlobalRootCA.crt.pem DigiCertGlobalRootG2.crt.pem MicrosoftRSARootCertificateAuthority2017.crt.pem > combined-ca-bundle.pem
+
+echo "MySQL SSL certificates downloaded and combined" >> /home/site/log-$stamp.txt
 
 sed -i "s|hostname[[:space:]]*= '';|hostname = getenv('DBHostName');|" database.php
 sed -i "s|db[[:space:]]*= '';|db = getenv('DBName');|" database.php
 sed -i "s|username[[:space:]]*= '';|username = getenv('DBUserName');|" database.php
 sed -i "s|password[[:space:]]*= '';|password = getenv('DBPassword');|" database.php
-sed -i "s|db_ssl_ca[[:space:]]*= '';|db_ssl_ca = getenv('DBSslCa');|" database.php
+# Use the combined certificate:
+sed -i "s|db_ssl_ca[[:space:]]*= '';|db_ssl_ca = '/home/site/wwwroot/combined-ca-bundle.pem';|" database.php
 
 sed -i "s/db_ssl_verify_server_cert = false;/db_ssl_verify_server_cert = true;/" database.php
 sed -i "s/$salt = '';/$salt = '$(echo $RANDOM | md5sum | head -c 20; echo;)';/" database.php
