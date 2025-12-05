@@ -98,7 +98,8 @@ cd /home/site/wwwroot
 echo "Downloading MySQL SSL certificates..." >> /home/site/log-$stamp.txt
 
 # Download DigiCert Global Root CA (existing/legacy certificate)
-wget --no-check-certificate https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt.pem
+# Not used anymore, but keeping for reference
+# wget --no-check-certificate https://dl.cacerts.digicert.com/DigiCertGlobalRootCA.crt.pem
 
 # Download DigiCert Global Root G2 (new certificate)
 wget --no-check-certificate https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem
@@ -109,8 +110,8 @@ curl -sSL "http://www.microsoft.com/pkiops/certs/Microsoft%20RSA%20Root%20Certif
 # Convert Microsoft certificate from DER to PEM format
 openssl x509 -inform der -in "MicrosoftRSARootCertificateAuthority2017.crt" -out MicrosoftRSARootCertificateAuthority2017.crt.pem
 
-# Create combined certificate file with all three certificates
-cat DigiCertGlobalRootCA.crt.pem DigiCertGlobalRootG2.crt.pem MicrosoftRSARootCertificateAuthority2017.crt.pem > combined-ca-bundle.pem
+# Create combined certificate file with two new certificates
+cat DigiCertGlobalRootG2.crt.pem MicrosoftRSARootCertificateAuthority2017.crt.pem > DigiCertGlobalRootCA.crt.pem
 
 echo "MySQL SSL certificates downloaded and combined" >> /home/site/log-$stamp.txt
 
@@ -119,7 +120,7 @@ sed -i "s|db[[:space:]]*= '';|db = getenv('DBName');|" database.php
 sed -i "s|username[[:space:]]*= '';|username = getenv('DBUserName');|" database.php
 sed -i "s|password[[:space:]]*= '';|password = getenv('DBPassword');|" database.php
 # Use the combined certificate:
-sed -i "s|db_ssl_ca[[:space:]]*= '';|db_ssl_ca = '/home/site/wwwroot/combined-ca-bundle.pem';|" database.php
+sed -i "s|db_ssl_ca[[:space:]]*= '';|db_ssl_ca = '/home/site/wwwroot/DigiCertGlobalRootCA.crt.pem';|" database.php
 
 sed -i "s/db_ssl_verify_server_cert = false;/db_ssl_verify_server_cert = true;/" database.php
 sed -i "s/$salt = '';/$salt = '$(echo $RANDOM | md5sum | head -c 20; echo;)';/" database.php
