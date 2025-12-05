@@ -174,10 +174,6 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WEBSITE_TIME_ZONE'
           value: timeZone
         }
-        {
-          name: 'WEBSITE_ENABLE_SYNC_UPDATE_SITE'
-          value: 'true'
-        }
       ]
     }
   }
