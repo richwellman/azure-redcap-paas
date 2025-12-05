@@ -75,13 +75,7 @@ fi
 
 echo "Unzipping redcap.zip" >> /home/site/log-$stamp.txt
 
-rm -rf /home/site/wwwroot/*
-unzip -oq $redcapZipPath -d /tmp/wwwroot 
-
-echo "Moving REDCap files to wwwroot" >> /home/site/log-$stamp.txt
-
-mv -f /tmp/wwwroot/redcap/* /home/site/wwwroot/
-rm -rf /tmp/wwwroot
+unzip -oq $redcapZipPath -d /tmp/wwwroot
 rm -f $redcapZipPath
 
 ####################################################################################
@@ -92,7 +86,7 @@ rm -f $redcapZipPath
 
 echo "Updating database connection info in database.php" >> /home/site/log-$stamp.txt
 
-cd /home/site/wwwroot
+cd /tmp/wwwroot/redcap
 
 # Download all three required certificates for Azure MySQL Flexible Server
 echo "Downloading MySQL SSL certificates..." >> /home/site/log-$stamp.txt
@@ -166,3 +160,17 @@ cp /home/site/repository/scripts/bash/postbuild.sh /home/site/deployments/tools/
 ####################################################################################
 
 cp /home/site/repository/scripts/bash/startup.sh /home/startup.sh
+
+####################################################################################
+#
+# Move REDCap files to wwwroot (done last to avoid container restart mid-script)
+#
+####################################################################################
+
+echo "Moving REDCap files to wwwroot" >> /home/site/log-$stamp.txt
+
+rm -rf /home/site/wwwroot/*
+mv -f /tmp/wwwroot/redcap/* /home/site/wwwroot/
+rm -rf /tmp/wwwroot
+
+echo "Deployment complete" >> /home/site/log-$stamp.txt
