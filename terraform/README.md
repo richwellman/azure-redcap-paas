@@ -1,194 +1,362 @@
-# Secure REDCap on Azure
+# REDCap Azure Terraform Deployment
 
-This repo will deploy REDCap on Azure using Terraform. The Terraform configuration will provision all the infrastructure with necessary security controls in place. This repo assumes you have a hub/spoke network topology in place in Azure and this REDCap deployment will be a spoke within your overall Azure architecture. Once the infrastructure has been provisioned, you will need to establish a virtual network peering from the hub virtual network back to the REDCap virtual network and deploy source code to get the application up and running. From there, you can run the Ansible playbook (inventory file gets generated as part of this deployment) to configure Azure Virtual Desktop (AVD) session hosts which is going to be used as our secure entry points to the REDCap backend system. The front end of REDCap (i.e., survey URLs) will be accessible through the Azure Front Door service.
+This Terraform configuration creates a complete REDCap infrastructure deployment on Azure, including:
 
-![Solution Architecture](media/solution-architecture.png)
+- Virtual Network with four subnets (PrivateLink, Compute, Integration, MySQLFlex)
+- Azure Blob Storage for REDCap file attachments
+- Azure Key Vault for secure credential storage
+- MySQL Flexible Server database
+- Linux App Service with PHP runtime for REDCap application
+- User-Assigned Managed Identity for secure access
+- Private endpoints and DNS zones for all services
+- VNet integration for secure networking
 
-> This repo does not include any REDCap shared services such as Azure FrontDoor or SendGrid (the box in the upper right portion of the diagram above). That needs to be managed from a separate repository. If you do not have Azure Front Door in place, you can access the app service front end and kudu console while logged into the AVD session host.
+The configuration replicates the Bicep module functionality from the main deployment and ARM templates.
+
+## Resources Created
+
+### Network Resources (network.tf)
+
+- **Virtual Network**: 192.168.1.0/24 address space
+- **PrivateLinkSubnet**: 192.168.1.0/28 - For private endpoints
+- **ComputeSubnet**: 192.168.1.16/28 - General compute resources
+- **IntegrationSubnet**: 192.168.1.32/28 - Delegated to App Service (Microsoft.Web/serverFarms)
+- **MySQLFlexSubnet**: 192.168.1.48/28 - Delegated to MySQL Flexible Server (Microsoft.DBforMySQL/flexibleServers)
+
+### Storage Resources (storage.tf)
+
+- **Storage Account**: StorageV2 with Standard_LRS replication, Hot access tier
+- **Blob Container**: "redcap" container for REDCap file attachments
+- **Private Endpoint**: For secure blob storage access via PrivateLinkSubnet
+- **Private DNS Zone**: privatelink.blob.core.windows.net for private endpoint DNS resolution
+- **VNet Link**: Links private DNS zone to the virtual network
+
+### Key Vault Resources (keyvault.tf)
+
+- **Key Vault**: Standard SKU with RBAC authorization, soft delete, and purge protection
+- **Key Vault Secrets**: Stores credentials (REDCap community, SQL admin, storage key)
+- **Private Endpoint**: For secure Key Vault access via PrivateLinkSubnet
+- **Private DNS Zone**: privatelink.vaultcore.azure.net for private endpoint DNS resolution
+- **VNet Link**: Links private DNS zone to the virtual network
+
+### Database Resources (database.tf)
+
+- **MySQL Flexible Server**: Burstable SKU (Standard_B1s) with MySQL 8.0.21
+- **MySQL Database**: "redcapdb" with utf8 charset and utf8_general_ci collation (REDCap requirement)
+- **Private Endpoint**: For secure MySQL access via PrivateLinkSubnet
+- **Private DNS Zone**: privatelink.mysql.database.azure.com for private endpoint DNS resolution
+- **VNet Link**: Links private DNS zone to the virtual network
+- **Server Configuration**: Disables sql_generate_invisible_primary_key parameter (REDCap requirement)
+
+### Web App Resources (webapp.tf)
+
+- **User-Assigned Managed Identity (UAMI)**: For Key Vault access and Azure resource authentication
+- **App Service Plan**: Premium v3 SKU (P0v3) for Linux
+- **Linux App Service**: PHP 8.4 runtime with REDCap application
+- **VNet Integration**: Connected to IntegrationSubnet for outbound traffic
+- **Private Endpoint**: For secure App Service access via PrivateLinkSubnet
+- **Private DNS Zone**: privatelink.azurewebsites.net for private endpoint DNS resolution
+- **VNet Link**: Links private DNS zone to the virtual network
+- **Source Control**: External Git integration for deployment scripts
 
 ## Prerequisites
 
-Before you begin, make sure you have the following:
+- Terraform >= 1.0
+- Azure CLI installed and authenticated (`az login`)
+- Azure subscription with appropriate permissions
+- Appropriate RBAC permissions to create resource groups and resources
 
-- Understanding of and/or experience with [Terraform on Azure](https://docs.microsoft.com/en-us/azure/developer/terraform/)
+## Usage
 
-- Implementation of [Azure Enterprise Scale Landing Zones](https://docs.microsoft.com/en-us/azure/cloud-adoption-framework/ready/enterprise-scale/architecture)
-  - To keep consistent with Terrafrom tooling, you may want to implement this [Azure/caf-enterprise-scale](https://registry.terraform.io/modules/Azure/caf-enterprise-scale/azurerm/latest) module for ESLZ
+1. **Copy the example variables files**:
 
-- As part of Azure Landing Zone architecture, you should have [Hub/Spoke network topology](https://docs.microsoft.com/en-us/azure/architecture/reference-architectures/hybrid-networking/hub-spoke?tabs=cli).
-  - The hub virtual network (VNET) should have to have an [Azure Firewall](https://azure.microsoft.com/en-us/services/azure-firewall/) or 3rd party Network Virtual Applicance (NVA) in place.
-  - If your Active Directory Domain Controller or [Azure AD Domain Services](https://docs.microsoft.com/en-us/azure/active-directory-domain-services/overview) is in another spoke network, you'll need to have proper [User Defined Routes (UDR)](https://docs.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview) in place to ensure transitive networking is enabled from the REDCap spoke networks and the AD servers.
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   cp secrets.tfvars.example secrets.tfvars
+   ```
 
-- Azure Storage Account or Terraform Cloud to store your remote state files.
+2. **Edit terraform.tfvars** with your subscription ID and non-sensitive configuration values
 
-  > Once you have these in place, update the `backend.tf` file to include your backend implementation
+3. **Edit secrets.tfvars** with sensitive values (passwords, credentials)
 
-- REDCap Community site credentials which the deployment automation will use to pull your copy of the REDCap source directly from the community site.
+   **Important**: The `secrets.tfvars` file is excluded from git via `.gitignore` to prevent accidentally committing secrets.
 
-  > NOTE: These values will be stored within the Azure Key Vault and the values will not be displayed within the Azure App Service configuration settings.
+4. **Initialize Terraform**:
 
-- Virtual Network address allocation for the REDCap resources and divided into Subnets. Here are the minimum CIDR ranges you'll need:
+   ```bash
+   terraform init
+   ```
 
-  > The deployment relies on the subnet names listed below. If you decide to change these, make sure you replace all instances in `main.tf`.
+5. **Review the plan**:
 
-  - `/25` for the virtual network
-  - `/27` for `PrivateLinkSubnet`
-  - `/27` for `ComputeSubnet`
-  - `/26` for `IntegrationSubnet`
+   ```bash
+   terraform plan -var-file="terraform.tfvars" -var-file="secrets.tfvars"
+   ```
 
-- DNS IP address(es) for domain joining virtual machines (for AVD).
+6. **Apply the configuration**:
 
-- Firewall IP address for configuring UDRs.
+   ```bash
+   terraform apply -var-file="terraform.tfvars" -var-file="secrets.tfvars"
+   ```
 
-  > Make sure your firewall is configured to allow traffic to pass from and to the REDCap virtual networks. See [this link](https://docs.microsoft.com/en-us/azure/firewall/tutorial-firewall-deploy-portal#configure-a-network-rule) if you are using Azure Firewall.
+### Alternative: Using Environment Variables
 
-- VNET peering information. More on vnet peering [here](https://docs.microsoft.com/en-us/azure/virtual-network/virtual-network-peering-overview).
+Instead of using `secrets.tfvars`, you can set sensitive values via environment variables:
 
-  > The Terraform configuration in this repo will perform the one-way peer from REDCap to your hub virtual network.
+```bash
+export TF_VAR_redcap_community_username="your-username"
+export TF_VAR_redcap_community_password="your-password"
+export TF_VAR_sql_password="your-sql-password"
 
-- Route table (UDR) routes.
-
-  > Hub/Spoke topology means you may be relying on resources that are deployed in another spoke vnet within your overall network topology. If resources are in a spoke vnet, you'll need to send the traffic to the firewall in the hub for spoke-to-spoke transit networking. More on vnet traffic routing [here](https://docs.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview).
-
-## Naming conventions
-
-The resources provisioned using this repo will be named using the naming conventions as outlined in the Cloud Adoption Framework. See this [link](https://docs.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming) for more info
-
-## Workspaces
-
-In order to maintain multiple REDCap deployments with this repo, a decision was made to manage each deployment config using `.tfvars` files and [terraform workspaces](https://www.terraform.io/docs/language/state/workspaces.html#when-to-use-multiple-workspaces). Terraform workspaces will allow you to keep all deployment state information in a single storage account but logically separated using workspaces. With each deployment, you'll need to ensure you are selecting the right workspace and using the right .tfvars file. This can get difficult to manage and there's a high possibility of human error.
-
-The alternative would be to create branches for each deployment but managing code changes between branches can become cumbersome over time as well.
-
-## So, what get's deployed?
-
-- [Azure Virtual Network](https://docs.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview) with [service endpoints](https://docs.microsoft.com/en-us/azure/virtual-network/virtual-network-service-endpoints-overview) enabled for Key Vault, Storage, Sql, and Web and a subnet delegation for App Service Vnet integration.
-    > Virtual network peering will also be made to hub (one way) but peer from hub to REDCap is not in scope here. Also, route table routes will be added to send traffic for internet and AD to the firewall but routes coming back to REDCap is not in scope here either. You will need to manage these in another repo or via Azure Portal.
-- [Azure Private DNS](https://docs.microsoft.com/en-us/azure/dns/private-dns-overview) zones for blob, mysql, and keyvault.
-    > The decision was made to deploy private DNS zones and linked to the REDCap virtual network as opposed to the hub virtual network which is more common. The reason for this was to reduce the network dependency (other than the hub peering) and not allow the REDCap resources to be resolvable within the rest of the network topology.
-- [Azure Storage Account with private endpoint](https://docs.microsoft.com/en-us/azure/storage/common/storage-private-endpoints) and service endpoints enabled (general purpose) to store survey data.
-- [Azure Storage Account with private endpoint](https://docs.microsoft.com/en-us/azure/storage/common/storage-private-endpoints) and service endpoints enabled (premium files) to mount as a shared drive in the secure workstation.
-- [Azure Key Vault with private endpoint](https://docs.microsoft.com/en-us/azure/key-vault/general/private-link-service) and service endpoints enabled to store application secrets. Access policies will be configured for AppService to be able to read secrets.
-- [Azure Database for MySQL with private endpoint](https://docs.microsoft.com/en-us/azure/mysql/concepts-data-access-security-private-link) enabled and service endpoints.
-- [Azure App Service](https://docs.microsoft.com/en-us/azure/app-service/overview) to host [REDCap application](https://www.project-redcap.org/). This service will be [vnet integrated](https://docs.microsoft.com/en-us/azure/app-service/web-sites-integrate-with-vnet) and have [network access restrictions](https://docs.microsoft.com/en-us/azure/app-service/app-service-ip-restrictions) in place to NOT allow any incoming traffic from any source except the ComputeSubnet (from secure WVD workstations), IntegrationSubnet, or [Azure FrontDoor](https://azure.microsoft.com/en-us/services/frontdoor/). 
-    > The client IP of whereever you are running the terraform from is included only for testing purposes. Be sure to remove the configuration in a production deployment.
-- [Azure Application Insights](https://docs.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) for app monitoring
-- [Windows Virtual Desktop](https://docs.microsoft.com/en-us/azure/virtual-desktop/overview) to provide secure computing environment to pull survey data and perform data analysis.
-- [Windows Virtual Machines](https://docs.microsoft.com/en-us/azure/virtual-machines/windows/overview) with [Windows Virtual Desktop Agents](https://docs.microsoft.com/en-us/azure/virtual-desktop/agent-overview) installed to register as WVD Session Hosts
-    > The virtual machines will have the following extensions installed: [DependencyAgent](https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/agent-dependency-windows), [IaaSAntimalware](https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/iaas-antimalware-windows), and [WinRM (for Ansible)](https://docs.ansible.com/ansible/latest/user_guide/windows_winrm.html) installed via [Custom Script Extension](https://docs.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-windows).
-- [Azure Recovery Services Vault](https://docs.microsoft.com/en-us/azure/backup/backup-azure-recovery-services-vault-overview) with [VM Backup Policy](https://docs.microsoft.com/en-us/azure/backup/backup-azure-manage-vms) and [Azure Files backup policy](https://docs.microsoft.com/en-us/azure/backup/backup-afs).
-- [Ansible inventory file](https://docs.ansible.com/ansible/latest/network/getting_started/first_inventory.html) will be created during the Terraform provisioning process which you can use to run the `site.yml` playbook against
-    > Ansible playbook will perform the actions of [downloading and installing the WVD agents](https://docs.microsoft.com/en-us/azure/virtual-desktop/create-host-pools-powershell#register-the-virtual-machines-to-the-windows-virtual-desktop-host-pool) and joining the VM to your domain.
-
-## Provisioning REDCap Infrastructure
-
-1. Create a new `.tfvars` file and drop into the `workspaces` directory.
-
-    - The name of your `.tfvars` file and the `terraform workspace` should be the same.
-
-1. Execute the `terraform plan` and `terraform apply` commands and pass in your `.tfvars` file in the `-var-file` parameter.
-
-    - You will be required to enter the local VM username and password and the REDCap zip file URL.
-    - Here is a sample `terraform plan` command:
-
-      ```sh
-      workspace=sample1
-      terraform workspace select $(workspace) || terraform workspace new $(workspace)
-      terraform plan -var-file="workspaces/$(workspace).tfvars" -var="vm_username=$(local-vm-username)" -var="vm_password=$(local-vm-password)" -var="redcapAppZip=$(redcapzip)" -out=$(System.DefaultWorkingDirectory)/$(workspace).tfplan
-      ```
-
-    - Here is a sample `terraform apply` command:
-
-      ```sh
-      terraform apply --auto-approve $(workspace).tfplan
-      ```
-
-1. After the resources have been provisioned, you'll need to create a vnet peering back from the hub vnet to the REDCap's vnet.
-
-    - This codebase will only apply one half of the peering (from REDCap vnet to the Hub).
-
-1. Next, deploy the source code from the github repo
-
-    - The command to deploy the source is in the `terraform output` as `deploy_source`
-    - To get the value of the `deploy_source` output variable use this command:
-
-      ```sh
-      terraform output -raw deploy_source
-      ```
-
-## Configure REDCap WVD Workstations
-
-> Ansible can automate configuration on Windows machines; however, the Ansible playbooks must be run from a Linux OS (Ubuntu, REDHat, CentOS, etc.).
-
-Configuration of secure workstations will be automated using Ansible. The `site.yml` [Ansible Playbook](https://docs.ansible.com/ansible/latest/user_guide/playbooks.html) found in this repo relies on a few variables needed to  domain join your virtual machines. Rather then saving credentials to the repo (never a good thing) we'll use `ansible-vault` to encrypt contents leveraging [Ansible Vault](https://docs.ansible.com/ansible/latest/user_guide/vault.html) and pass in a `secrets.yml` file on the ansible-playbook run.
-
-Let's start by creating a vault file:
-
-```sh
-ansible-vault create secrets.yml
+terraform apply -var-file="terraform.tfvars"
 ```
 
-Type in a new vault password and enter the following contents:
+## Service Endpoints
 
-> You're using `vi` here so make sure you hit the `i` key be in `insert` mode
+Each subnet is configured with the following service endpoints:
 
-```sh
-dns_domain_name: <YOUR_DOMAIN_NAME>
-domain_admin_user: <YOUR_DOMAIN_JOIN_USER>
-domain_admin_password: <YOUR_DOMAIN_JOIN_PASSWORD>
-domain_ou_path: <YOUR_DOMAIN_OU_PATH>
+- **PrivateLinkSubnet**: Microsoft.KeyVault, Microsoft.Storage
+- **ComputeSubnet**: Microsoft.KeyVault, Microsoft.Storage, Microsoft.Web
+- **IntegrationSubnet**: Microsoft.KeyVault, Microsoft.Storage, Microsoft.Web
+- **MySQLFlexSubnet**: Microsoft.KeyVault, Microsoft.Storage
+
+## Subnet Delegations
+
+- **IntegrationSubnet**: Delegated to `Microsoft.Web/serverFarms` for App Service VNet integration
+- **MySQLFlexSubnet**: Delegated to `Microsoft.DBforMySQL/flexibleServers` for MySQL Flexible Server
+
+## Outputs
+
+The configuration outputs the following values for use in other deployments:
+
+### Network Outputs
+
+- `vnet_id` - Virtual network resource ID
+- `vnet_name` - Virtual network name
+- `private_link_subnet_id` - PrivateLinkSubnet resource ID
+- `compute_subnet_id` - ComputeSubnet resource ID
+- `integration_subnet_id` - IntegrationSubnet resource ID
+- `mysql_flex_subnet_id` - MySQLFlexSubnet resource ID
+
+### Storage Outputs
+
+- `storage_account_id` - Storage account resource ID
+- `storage_account_name` - Storage account name
+- `storage_account_primary_blob_endpoint` - Primary blob endpoint URL
+- `storage_account_primary_access_key` - Primary access key (sensitive)
+- `blob_container_name` - Name of the REDCap blob container
+- `storage_private_endpoint_id` - Storage private endpoint resource ID
+- `blob_private_dns_zone_id` - Blob private DNS zone resource ID
+
+### Key Vault Outputs
+
+- `key_vault_id` - Key Vault resource ID
+- `key_vault_name` - Key Vault name
+- `key_vault_uri` - Key Vault URI
+- `keyvault_private_endpoint_id` - Key Vault private endpoint resource ID
+- `keyvault_private_dns_zone_id` - Key Vault private DNS zone resource ID
+- `key_vault_tenant_id` - Tenant ID associated with the Key Vault
+
+### Database Outputs
+
+- `mysql_server_id` - MySQL Flexible Server resource ID
+- `mysql_server_name` - MySQL Flexible Server name
+- `mysql_server_fqdn` - MySQL Flexible Server fully qualified domain name
+- `mysql_database_name` - MySQL database name
+- `mysql_admin_username` - MySQL administrator username (sensitive)
+- `mysql_private_endpoint_id` - MySQL private endpoint resource ID
+- `mysql_private_dns_zone_id` - MySQL private DNS zone resource ID
+
+### Web App Outputs
+
+- `uami_id` - User-Assigned Managed Identity resource ID
+- `uami_principal_id` - UAMI principal ID (for RBAC assignments)
+- `uami_client_id` - UAMI client ID
+- `app_service_plan_id` - App Service Plan resource ID
+- `app_service_id` - App Service resource ID
+- `app_service_name` - App Service name
+- `app_service_default_hostname` - App Service default hostname
+- `app_service_url` - App Service HTTPS URL
+- `app_service_outbound_ip_addresses` - App Service outbound IP addresses
+- `app_service_private_endpoint_id` - App Service private endpoint resource ID
+- `webapp_private_dns_zone_id` - App Service private DNS zone resource ID
+
+## Storage Security Features
+
+The storage account is configured with the following security settings:
+
+- **Public Network Access**: Disabled - only accessible via private endpoint
+- **Minimum TLS Version**: TLS 1.2
+- **Public Blob Access**: Disabled
+- **HTTPS Only**: Required for all connections
+- **Encryption**: Enabled for blob and file services using Microsoft-managed keys
+- **Cross-Tenant Replication**: Disabled
+
+## Key Vault Security Features
+
+The Key Vault is configured with the following security settings:
+
+- **Public Network Access**: Disabled - only accessible via private endpoint
+- **RBAC Authorization**: Enabled for granular access control
+- **Soft Delete**: Enabled with 7-day retention period
+- **Purge Protection**: Enabled to prevent permanent deletion during retention period
+- **Network ACLs**: Default action set to Deny, with bypass for Azure Services
+- **Enabled for Deployment**: Allows Azure to retrieve secrets during VM deployment
+- **Enabled for Template Deployment**: Allows ARM templates to retrieve secrets
+- **Tenant ID**: Automatically set from current Azure client configuration
+
+### Key Vault Secrets
+
+The following secrets are stored in Key Vault:
+
+- `redcapCommunityUsername` - REDCap community site username
+- `redcapCommunityPassword` - REDCap community site password
+- `sqlAdminName` - MySQL admin username
+- `sqlPassword` - MySQL admin password
+- `storageKey` - Storage account primary access key (automatically populated)
+
+**Note**: Secrets with sensitive values should be provided via environment variables (e.g., `TF_VAR_sql_password`) or entered during `terraform apply` to avoid storing them in plain text.
+
+## MySQL Database Configuration
+
+The MySQL Flexible Server is configured with the following settings:
+
+- **Public Network Access**: Disabled - only accessible via private endpoint
+- **Version**: MySQL 8.0.21
+- **SKU**: Standard_B1s (Burstable tier) - suitable for development/small production workloads
+- **Storage**: 20GB with auto-grow enabled, 396 IOPS
+- **Backup Retention**: 7 days
+- **Geo-Redundant Backup**: Disabled (can be enabled by setting variable)
+- **High Availability**: Disabled (can be enabled by setting variable)
+
+### REDCap Database Requirements
+
+The database is configured with specific requirements for REDCap:
+
+- **Character Set**: `utf8` (required by REDCap)
+- **Collation**: `utf8_general_ci` (required by REDCap)
+- **Invisible Primary Key**: Disabled via `sql_generate_invisible_primary_key = OFF` configuration
+- **Database Name**: `redcapdb`
+
+### MySQL Connection
+
+The MySQL server is accessible via private endpoint with FQDN output as `mysql_server_fqdn`. Connection details:
+
+- **Host**: Use the FQDN from `mysql_server_fqdn` output
+- **Database**: `redcapdb`
+- **Username**: Value from `sql_admin_name` variable (default: `sqladmin`)
+- **Password**: Stored in Key Vault secret `sqlPassword`
+- **Port**: 3306 (default MySQL port)
+
+## App Service Configuration
+
+The App Service is configured with the following settings:
+
+- **Public Network Access**: Disabled - only accessible via private endpoint
+- **SKU**: Premium v3 (P0v3) - suitable for production workloads
+- **OS**: Linux
+- **Runtime**: PHP 8.4
+- **Always On**: Enabled
+- **HTTP/2**: Enabled
+- **Minimum TLS**: 1.2
+- **HTTPS Only**: Required
+- **VNet Integration**: Connected to IntegrationSubnet for outbound connectivity
+- **Managed Identity**: User-Assigned Managed Identity for Key Vault access
+
+### REDCap Application Settings
+
+The App Service is configured with application settings that connect to all integrated services:
+
+- **Database Connection**: References MySQL FQDN, database name, and credentials from Key Vault
+- **Storage Account**: References storage account name, key (from Key Vault), and container name
+- **REDCap Community**: References community credentials from Key Vault for downloading REDCap
+- **SMTP Configuration**: Configurable SMTP server settings for email notifications
+- **Source Control**: GitHub repository URL and branch for deployment scripts
+
+### Key Vault Integration
+
+All sensitive credentials are stored in Key Vault and referenced using the `@Microsoft.KeyVault()` syntax:
+
+- `DB_USERNAME` → Key Vault secret `sqlAdminName`
+- `DB_PASSWORD` → Key Vault secret `sqlPassword`
+- `STORAGE_ACCOUNT_KEY` → Key Vault secret `storageKey`
+- `REDCAP_COMMUNITY_USERNAME` → Key Vault secret `redcapCommunityUsername`
+- `REDCAP_COMMUNITY_PASSWORD` → Key Vault secret `redcapCommunityPassword`
+
+The User-Assigned Managed Identity is configured as the Key Vault reference identity, allowing the App Service to retrieve secrets securely.
+
+### Deployment Process
+
+The App Service uses External Git integration to pull deployment scripts from the specified repository:
+
+1. **Source Repository**: Default is Microsoft's azure-redcap-paas repository (configurable)
+2. **Deployment Scripts**: Located in `scripts/bash/` directory
+3. **Startup Command**: `/home/startup.sh` runs on container startup to install sendmail, cron, and configure REDCap cron job
+
+## RBAC Permissions
+
+After deploying the resources, you'll need to assign RBAC roles for proper access control:
+
+### Key Vault Access
+
+```bash
+# Assign Key Vault Administrator role to your user (for managing Key Vault)
+az role assignment create \
+  --role "Key Vault Administrator" \
+  --assignee <your-user-object-id> \
+  --scope /subscriptions/<subscription-id>/resourceGroups/rg-redcapkeyvault-prod-002/providers/Microsoft.KeyVault/vaults/kv-redcapv4h7-prod-002
+
+# Assign Key Vault Secrets User role to UAMI (for App Service to read secrets)
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee $(terraform output -raw uami_principal_id) \
+  --scope /subscriptions/<subscription-id>/resourceGroups/rg-redcapkeyvault-prod-002/providers/Microsoft.KeyVault/vaults/kv-redcapv4h7-prod-002
 ```
 
-> Save the file using the following command `:wq`
+### Storage Account Access (Optional)
 
-The file `secrets.yml` needs to be saved to your repository or downloaded as a secure file within your pipeline.
+If using managed identity for storage access instead of access keys:
 
-To use view the ansible vault file you'll need to enter the vault password to decrypt the contents. However, in a pipeline scenario, you will not have the opportunity to enter the pipeline at runtime, but you can use a file and point the ansible-vault to that. This is the approach we'll use for the pipeline.
-
-Create a `vaultpass` file.
-
-```sh
-echo '<YOUR_ANSIBLE_VAULT_PASSWORD>' > vaultpass
+```bash
+# Assign Storage Blob Data Contributor role to UAMI
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee $(terraform output -raw uami_principal_id) \
+  --scope /subscriptions/<subscription-id>/resourceGroups/rg-redcapstorage-prod-002/providers/Microsoft.Storage/storageAccounts/stredcapz5uoprod002
 ```
 
-To ensure you did all this properly, you can use the `view` subcommand of `ansible-vault`. This will decrypt the vault and display the contents you entered.
+## Post-Deployment Steps
 
-```sh
-ansible-vault view secrets.yml --vault-password-file vaultpass
-```
+After the Terraform deployment completes successfully:
 
-If all looks good, be sure the variable names aligns with the variables we'll use in our playbook. When you are ready to run the playbook, you will run it by passing in additional variables from your `secrets.yml` file. This will be denoted using the `-e` flag and since we are referencing a file, you'll need to add the `@` symbol in front of the file name
+1. **Assign RBAC Roles**: Run the RBAC commands above to grant Key Vault access to the UAMI
+2. **Verify App Service**: Check that the App Service is running and can access Key Vault secrets
+3. **Run REDCap Installation**: SSH into the App Service and run the REDCap installation script:
 
-```sh
-ansible-playbook -i inventory-sample2 -e @secrets.yml --vault-password-file vaultpass site.yml
-```
+   ```bash
+   # SSH to App Service (requires Azure CLI)
+   az webapp ssh --resource-group rg-redcapweb-prod-002 --name app-redcapbgk7-prod-002
 
-**Resources:**
+   # Run installation script
+   bash ./site/repository/scripts/bash/install.sh
+   ```
 
-- [Encrypting content with Ansible Vault](https://docs.ansible.com/ansible/latest/user_guide/vault.html)
-- [Handling secrets in your Ansible playbooks](https://www.redhat.com/sysadmin/ansible-playbooks-secrets)
+4. **Restart App Service**: After installation, restart the App Service to load updated settings
+5. **Verify Configuration**: Access the REDCap Configuration Check page to verify all settings are green
 
-## Deleting REDCap
+## Notes
 
-- If you have deployed a Recovery Services Vault, you'll need to make sure to stop and delete your VM and file share backups, unregister your storage account from Backup Infrastructure, and remove the management lock on the resource group (if necessary) before running the `terraform destroy` command.
-- Be sure to delete the vnet peering from the hub to the REDCap instance
-- Be sure to delete the `terraform workspace`
-
-## Azure DevOps Pipeline
-
-This repo comes with an `azure-pipelines.yml` file. To use it, you'll need to setup a [Variable Group](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=yaml) and add the following secrets. Ideally you will be storing these values in [Azure Key Vault](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/variable-groups?view=azure-devops&tabs=yaml#link-secrets-from-an-azure-key-vault) and using that to link secrets:
-
-- `client-id` - used by terraform
-- `client-secret` - used by terraform
-- `tenant-id` - used by terraform
-- `main-subscription-id` - this is the id of the subscription where your storage account where remote state file lives
-- `local-vm-username` - this will passed dynamically to the terraform apply command
-- `local-vm-password` - this will passed dynamically to the terraform apply command
-- `redcapzip` - this is the publically accessible (yet secure) URL to your REDCap zip file
-- `ansible-vault-password` - this is used to decrypt your ansible-vault without being prompted for a password
-
-You should also provision a small Linux VM in your REDCap shared services subscription and install the self-hosted [Azure DevOps Build Agent](https://docs.microsoft.com/en-us/azure/devops/pipelines/agents/v2-linux?view=azure-devops) software on it. This way, you will be able to use your build machine to invoke the Ansible playbook against the new session host VMs using private IP addresses within your Azure virtual network.
-
-Alternatively, if you do not want to manage another VM, you can follow this [guide](https://pauldotyu.github.io/azure-pipeline-agent/) to run an Azure DevOps Build Agent in a container using Azure Container Instances within your virtual network.
-
-Lastly, add pipeline variables called `notifyUsers` and `workspace` that can be [set at queue time](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/variables?view=azure-devops&tabs=yaml%2Cbatch#allow-at-queue-time).
+- Private endpoint network policies are disabled on all subnets to support private endpoints
+- The configuration replicates the Bicep modules in the main deployment for network, storage, Key Vault, database, and web app resources
+- All resources are tagged according to the REDCap tagging strategy
+- Resource names must be globally unique:
+  - Storage account: 3-24 lowercase alphanumeric characters
+  - Key Vault: 3-24 characters
+  - MySQL server: 3-63 lowercase characters
+  - App Service: globally unique DNS name
+- The `storageKey` secret is automatically populated with the storage account's primary access key
+- All credentials are stored in Key Vault and referenced by the App Service using `@Microsoft.KeyVault()` syntax
+- The MySQL server and App Service use private endpoint connectivity and are not accessible from the public internet
+- REDCap-specific database configuration (charset, collation, invisible primary key setting) is automatically applied
+- The App Service uses VNet integration for outbound traffic and private endpoint for inbound access
+- Source control integration pulls deployment scripts from the configured GitHub repository

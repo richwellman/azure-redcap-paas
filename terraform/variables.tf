@@ -1,323 +1,240 @@
 variable "subscription_id" {
+  description = "Azure subscription ID"
   type        = string
-  description = "The subscription you wish to deploy this instance of REDCap into"
-}
-
-variable "tags" {
-  type = map(any)
 }
 
 variable "environment" {
+  description = "Environment name (test, demo, prod)"
   type        = string
-  description = "Environment"
-  default     = "dev"
+  default     = "prod"
+  validation {
+    condition     = contains(["test", "demo", "prod"], var.environment)
+    error_message = "Environment must be test, demo, or prod."
+  }
+}
+
+variable "sequence" {
+  description = "Deployment sequence number (e.g., 001, 002)"
+  type        = string
+  default     = "001"
+  validation {
+    condition     = can(regex("^\\d{3}$", var.sequence))
+    error_message = "Sequence must be a 3-digit number (e.g., 001, 002)."
+  }
+}
+
+variable "resource_group_name" {
+  description = "Name of the resource group for all REDCap resources"
+  type        = string
+  default     = ""
 }
 
 variable "location" {
+  description = "Azure region for resources"
   type        = string
-  description = "Location"
-  default     = "westus2"
+  default     = "centralus"
+}
 
-  validation {
-    condition = can(index([
-      "centralus",
-      "eastus",
-      "eastus2",
-      "northcentralus",
-      "southcentralus",
-      "westcentralus",
-      "westus",
-      "westus2"
-    ], var.location) >= 0)
-    error_message = "The deployment location must be US regions. If you want to deploy to other regions, add them to the list."
-  }
+variable "vnet_name" {
+  description = "Name of the virtual network"
+  type        = string
+  default     = "vnet-redcapz6fr-prod-002"
 }
 
 variable "vnet_address_space" {
+  description = "Address space for the virtual network"
   type        = list(string)
-  description = "Virtual network address space."
+  default     = ["192.168.1.0/24"]
 }
 
-variable "subnets" {
-  type = list(object({
-    name           = string
-    address_prefix = string
-  }))
-  description = "List of subnets"
-}
-
-variable "subnet_routes" {
-  type = list(object({
-    name                   = string
-    address_prefix         = string
-    next_hop_type          = string
-    next_hop_in_ip_address = string
-  }))
-  description = "List of routes to be applied to the ComputeSubnet"
-}
-
-variable "storage_account_tier" {
+variable "private_link_subnet_prefix" {
+  description = "Address prefix for PrivateLinkSubnet"
   type        = string
-  description = "Storage account tier"
-  default     = "Standard"
+  default     = "192.168.1.0/28"
 }
 
-variable "storage_account_replication_type" {
+variable "compute_subnet_prefix" {
+  description = "Address prefix for ComputeSubnet"
   type        = string
-  description = "Storage account replication type"
-  default     = "GRS"
+  default     = "192.168.1.16/28"
 }
 
-variable "app_service_plan_tier" {
+variable "integration_subnet_prefix" {
+  description = "Address prefix for IntegrationSubnet"
   type        = string
-  description = "App service account tier"
-  default     = "Standard"
+  default     = "192.168.1.32/28"
 }
 
-variable "app_service_plan_size" {
+variable "mysql_flex_subnet_prefix" {
+  description = "Address prefix for MySQLFlexSubnet"
   type        = string
-  description = "Describes plan's pricing tier and capacity - this can be changed after deployment. Check details at https://azure.microsoft.com/en-us/pricing/details/app-service/"
-  default     = "S1"
-
-  validation {
-    condition = can(index([
-      "F1",
-      "D1",
-      "B1",
-      "B2",
-      "B3",
-      "S1",
-      "S2",
-      "S3",
-      "P1",
-      "P2",
-      "P3",
-      "P4"
-    ], var.app_service_plan_size) >= 0)
-    error_message = "The skuName is not valid."
-  }
+  default     = "192.168.1.48/28"
 }
 
-variable "vnet_peerings" {
-  type = list(object({
-    peering_name     = string
-    vnet_resource_id = string
-  }))
-  description = "List of virtual networks peers"
-}
 
-variable "firewall_ip" {
-  type = string
-}
 
-variable "dns_servers" {
-  type = list(string)
-}
-
-variable "vm_count" {
-  type    = number
-  default = 1
-}
-
-variable "vm_sku" {
-  type    = string
-  default = "Standard_B2ms"
-}
-
-variable "vm_username" {
-  type = string
-}
-
-variable "vm_password" {
-  type = string
-}
-
-variable "vm_os_disk_caching" {
-  type = object({
-    caching              = string
-    storage_account_type = string
-  })
-  description = "Virtual machine OS disk cachine"
-  default = {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
-  }
-}
-
-variable "vm_image" {
-  type = object({
-    publisher = string
-    offer     = string
-    sku       = string
-    version   = string
-  })
-  description = "Virtual machine image - Use 'az vm image' command to find your image"
-}
-
-variable "administrator_name" {
-  type = string
-}
-
-variable "devops_subnet_id" {
-  type = string
-}
-
-variable "linuxFxVersion" {
-  type    = string
-  default = "php|7.4"
-}
-
-#############################################
-# AZURE ARM TEMPLATE PARAMETERS
-#############################################
-
-variable "siteName" {
+variable "redcap_community_username" {
+  description = "REDCap community site username (stored in Key Vault)"
   type        = string
-  description = "Name of azure web app"
-  default     = "redcap"
-}
-
-variable "administratorLogin" {
-  type        = string
-  description = "Database administrator login name"
-  default     = "redcap_app"
-}
-
-variable "redcapAppZip" {
-  type        = string
-  description = "A publicly accessible path to your copy of the REDCap zip file."
-}
-
-variable "redcapCommunityUsername" {
-  type        = string
-  description = "REDCap community website username"
   default     = ""
-}
-
-variable "redcapCommunityPassword" {
-  type        = string
-  description = "REDCap community website password"
   sensitive   = true
+}
+
+variable "redcap_community_password" {
+  description = "REDCap community site password (stored in Key Vault)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "sql_admin_name" {
+  description = "SQL admin username (stored in Key Vault)"
+  type        = string
+  default     = "sqladmin"
+}
+
+variable "sql_password" {
+  description = "SQL admin password (stored in Key Vault)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+
+variable "mysql_sku_name" {
+  description = "MySQL Flexible Server SKU name"
+  type        = string
+  default     = "GP_Standard_D2ds_v4"
+}
+
+variable "mysql_version" {
+  description = "MySQL version"
+  type        = string
+  default     = "8.4"
+}
+
+variable "mysql_storage_size_gb" {
+  description = "MySQL storage size in GB"
+  type        = number
+  default     = 20
+}
+
+variable "mysql_storage_iops" {
+  description = "MySQL storage IOPS"
+  type        = number
+  default     = 396
+}
+
+variable "mysql_backup_retention_days" {
+  description = "MySQL backup retention in days"
+  type        = number
+  default     = 7
+}
+
+variable "mysql_geo_redundant_backup" {
+  description = "Enable geo-redundant backup for MySQL"
+  type        = string
+  default     = "Disabled"
+  validation {
+    condition     = contains(["Enabled", "Disabled"], var.mysql_geo_redundant_backup)
+    error_message = "MySQL geo-redundant backup must be Enabled or Disabled."
+  }
+}
+
+variable "mysql_database_name" {
+  description = "Name of the MySQL database"
+  type        = string
+  default     = "redcapdb"
+}
+
+variable "mysql_database_charset" {
+  description = "MySQL database character set (required for REDCap)"
+  type        = string
+  default     = "utf8"
+}
+
+variable "mysql_database_collation" {
+  description = "MySQL database collation (required for REDCap)"
+  type        = string
+  default     = "utf8_general_ci"
+}
+
+
+variable "app_service_sku_name" {
+  description = "App Service Plan SKU name"
+  type        = string
+  default     = "P0v3"
+}
+
+variable "app_service_php_version" {
+  description = "PHP version for the App Service"
+  type        = string
+  default     = "8.4"
+}
+
+variable "app_service_startup_command" {
+  description = "Startup command for the App Service"
+  type        = string
+  default     = "/home/startup.sh"
+}
+
+variable "redcap_zip_url" {
+  description = "Direct URL to REDCap zip file (optional)"
+  type        = string
+  default     = "https://stthcriblpov.blob.core.windows.net/redcap/redcap15.5.0.zip"
+  sensitive   = true
+}
+
+variable "scm_repo_url" {
+  description = "Source control repository URL"
+  type        = string
+  default     = "https://github.com/richwellman/azure-redcap-paas"
+}
+
+variable "scm_repo_branch" {
+  description = "Source control repository branch"
+  type        = string
+  default     = "main"
+}
+
+variable "smtp_fqdn" {
+  description = "SMTP server FQDN or IP address"
+  type        = string
   default     = ""
 }
 
-variable "redcapAppZipVersion" {
+variable "smtp_port" {
+  description = "SMTP server port"
   type        = string
-  description = "REDCap version"
-  default     = "latest"
+  default     = "587"
 }
 
-variable "administrator_email" {
+variable "smtp_from_email_address" {
+  description = "SMTP from email address"
   type        = string
-  description = "Email address configured as the sending address in RedCAP"
+  default     = ""
 }
 
-variable "skuCapacity" {
-  type        = number
-  description = "Describes plan's instance count (how many distinct web servers will be deployed in the farm) - this can be changed after deployment"
-  default     = 1
+variable "enable_keyvault_public_access" {
+  description = "Enable public network access to Key Vault (required for Terraform deployment unless running from VNet)"
+  type        = bool
+  default     = true
 }
 
-variable "databaseStorageSizeGB" {
-  type    = number
-  default = 32
-
-  description = "Azure database for MySQL sku Size."
-}
-
-variable "databaseForMySqlTier" {
-  type        = string
-  default     = "GeneralPurpose"
-  description = "Select MySql server performance tier. Please review https://docs.microsoft.com/en-us/azure/mysql/concepts-pricing-tiers and ensure your choices are available in the selected region."
-
-  validation {
-    condition = can(index([
-      "Basic",
-      "GeneralPurpose",
-      "MemoryOptimized"
-    ], var.databaseForMySqlTier) >= 0)
-    error_message = "The databaseForMySqlTier is not valid."
+variable "tags" {
+  description = "Tags to apply to resources"
+  type        = map(string)
+  default = {
+    Application    = "Redcap"
+    DR             = "none"
+    ServiceClass   = "P3"
+    Owner          = "Rich Wellman"
+    Support        = "PE-Engineering"
+    Classification = "P3"
+    workloadType   = "networking"
+    cust_1         = "User Data"
+    cust_2         = "User Data"
+    cust_3         = "User Data"
+    cust_4         = "User Data"
   }
-
-}
-
-variable "databaseForMySqlFamily" {
-  type        = string
-  description = "Select MySql compute generation. Please review https://docs.microsoft.com/en-us/azure/mysql/concepts-pricing-tiers and ensure your choices are available in the selected region."
-  default     = "Gen5"
-
-  validation {
-    condition = can(index([
-      "Gen4",
-      "Gen5"
-    ], var.databaseForMySqlFamily) >= 0)
-    error_message = "The databaseForMySqlFamily is not valid."
-  }
-}
-
-variable "databaseForMySqlCores" {
-  type        = number
-  description = "Select MySql vCore count. Please review https://docs.microsoft.com/en-us/azure/mysql/concepts-pricing-tiers and ensure your choices are available in the selected region."
-  default     = 2
-
-  validation {
-    condition = can(index([
-      1,
-      2,
-      4,
-      8,
-      16,
-      32
-    ], var.databaseForMySqlCores) >= 0)
-    error_message = "The databaseForMySqlCores is not valid."
-  }
-}
-
-variable "mysqlVersion" {
-  type        = string
-  description = "MySQL version"
-  default     = "5.7"
-
-  validation {
-    condition = can(index([
-      "5.6",
-      "5.7"
-    ], var.mysqlVersion) >= 0)
-    error_message = "The mysqlVersion is not valid."
-  }
-}
-
-variable "storageType" {
-  type        = string
-  description = "The default selected is 'Locally Redundant Storage' (3 copies in one region). See https://docs.microsoft.com/en-us/azure/storage/common/storage-redundancy for more information."
-  default     = "Standard_LRS"
-
-  validation {
-    condition = can(index([
-      "Standard_LRS",
-      "Standard_ZRS",
-      "Standard_GRS",
-      "Standard_RAGRS",
-      "Premium_LRS"
-    ], var.storageType) >= 0)
-    error_message = "The storageType is not valid."
-  }
-}
-
-variable "storageContainerName" {
-  type        = string
-  description = "Name of the container used to store backing files in the new storage account. This container is created automatically during deployment."
-  default     = "redcap"
-}
-
-variable "repoURL" {
-  type        = string
-  description = "The path to the deployment source files on GitHub"
-  default     = "https://github.com/vanderbilt-redcap/redcap-azure.git"
-}
-
-variable "branch" {
-  type        = string
-  description = "The main branch of the application repo"
-  default     = "master"
 }

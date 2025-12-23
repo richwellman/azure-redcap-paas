@@ -1,0 +1,78 @@
+# Copy this file to terraform.tfvars and fill in your values
+#
+# REQUIRED: Only subscription_id is required. All other variables have defaults.
+# Resource names (storage, key vault, mysql, app service, etc.) are auto-generated
+# with random suffixes for global uniqueness.
+
+# ============================================================================
+# REQUIRED VARIABLES
+# ============================================================================
+
+subscription_id = "your-subscription-id-here"
+
+# ============================================================================
+# COMMONLY CUSTOMIZED VARIABLES (all have defaults)
+# ============================================================================
+
+# Deployment configuration
+environment = "prod"      # Options: test, demo, prod (default: prod)
+sequence    = "001"       # 3-digit deployment sequence (default: 001)
+location    = "centralus" # Azure region (default: centralus)
+
+# Resource group name (leave empty to auto-generate: rg-redcap-{environment}-{sequence})
+resource_group_name = ""
+
+# Network configuration
+vnet_address_space         = ["192.168.1.0/24"] # VNet CIDR (default: 192.168.1.0/24)
+private_link_subnet_prefix = "192.168.1.0/28"   # default: 192.168.1.0/28
+compute_subnet_prefix      = "192.168.1.16/28"  # default: 192.168.1.16/28
+integration_subnet_prefix  = "192.168.1.32/28"  # default: 192.168.1.32/28
+mysql_flex_subnet_prefix   = "192.168.1.48/28"  # default: 192.168.1.48/28
+
+# ============================================================================
+# OPTIONAL OVERRIDES (uncomment to customize)
+# ============================================================================
+
+# Database configuration
+# mysql_database_name         = "redcapdb"         # default: redcapdb
+# mysql_sku_name              = "Standard_B1s"     # default: Standard_B1s
+# mysql_version               = "8.0.21"           # default: 8.0.21
+# mysql_storage_size_gb       = 20                 # default: 20
+# mysql_storage_iops          = 396                # default: 396
+# mysql_backup_retention_days = 7                  # default: 7
+# mysql_geo_redundant_backup  = "Disabled"         # default: Disabled
+# mysql_database_charset      = "utf8"             # default: utf8 (REDCap requirement)
+# mysql_database_collation    = "utf8_general_ci"  # default: utf8_general_ci (REDCap requirement)
+
+# App Service configuration
+# app_service_sku_name        = "P0v3"            # default: P0v3
+# app_service_php_version     = "8.4"             # default: 8.4
+# app_service_startup_command = "/home/startup.sh" # default: /home/startup.sh
+
+# REDCap deployment
+# redcap_zip_url  = ""  # Optional: Direct URL to REDCap zip (with SAS token)
+# scm_repo_url    = "https://github.com/microsoft/azure-redcap-paas" # default
+# scm_repo_branch = "main" # default: main
+
+# SMTP configuration
+# smtp_fqdn               = "smtp.example.com"
+# smtp_port               = "587"
+# smtp_from_email_address = "noreply@example.com"
+
+# ============================================================================
+# TAGS (customize as needed)
+# ============================================================================
+
+tags = {
+  Application    = "Redcap"
+  DR             = "none"
+  ServiceClass   = "P3"
+  Owner          = "Rich Wellman"
+  Support        = "PE-Engineering"
+  Classification = "P3"
+  workloadType   = "networking"
+  cust_1         = "User Data"
+  cust_2         = "User Data"
+  cust_3         = "User Data"
+  cust_4         = "User Data"
+}
